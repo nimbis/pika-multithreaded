@@ -196,12 +196,12 @@ class AmqpClient:
             self.queue_declare(queue, durable=True)
         keep_consuming = True
         self.user_consumer_callback = callback_function
-        # Set QOS prefetch count. Now that this is multi-threaded, we can now control how many
-        # messages we process in parallel by simply increasing this number.
-        self.channel.basic_qos(prefetch_count=qos_count)
         while keep_consuming:
             self.logger.debug(f"Connecting to queue {queue}...")
             try:
+                # Set QOS prefetch count. Now that this is multi-threaded, we can now control how
+                # many messages we process in parallel by simply increasing this number.
+                self.channel.basic_qos(prefetch_count=qos_count)
                 # Consume the queue
                 if consumer_tag:
                     self.consumer_tag = consumer_tag
