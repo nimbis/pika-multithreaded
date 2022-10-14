@@ -40,7 +40,7 @@ with open("README.md", "r") as file:
 
 setup(
     name='pika-multithreaded',
-    version='1.0.0',
+    version='1.0.1',
     author='Nimbis Services',
     author_email='info@nimbisservics.com',
     description='A project that enables multithreading support for the Pika package',
