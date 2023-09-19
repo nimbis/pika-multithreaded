@@ -5,6 +5,7 @@ from pika.exceptions import ChannelClosedByBroker, StreamLostError, ChannelWrong
 import signal
 import ssl
 import threading
+import time
 import uuid
 
 from .utils import AmqpUtils
@@ -63,7 +64,7 @@ class AmqpClient:
         if auto_close_connection:
             self.close()
 
-    def connect(self):
+    def connect(self, retry_if_failed=True):
         if self.url.startswith("amqps://"):
             # Looks like we're making a secure connection
             # Create the SSL context for our secure connection. This context forces a more secure
@@ -83,8 +84,24 @@ class AmqpClient:
             raise Exception("AMQP URL must start with 'amqp://' or 'amqps://'")
 
         # Create the connection and store them in self
-        self.connection = pika.BlockingConnection(url_parameters)
-        self.channel = self.connection.channel()
+        connection_attempt = 1
+        while True:
+            try:
+                self.connection = pika.BlockingConnection(url_parameters)
+                self.channel = self.connection.channel()
+                break
+            except Exception as ex:
+                self.logger.error(
+                    f"Unable to connect: {ex}",
+                    exc_info=True)
+                if not retry_if_failed:
+                    break
+            # Add some backoff seconds if we're supposed to retry the connection
+            self.logger.debug("Waiting 10 seconds before retrying the connection:")
+            time.sleep(10)
+            connection_attempt += 1
+            self.logger.debug(
+                f"Attempting to connect again (attempt #{connection_attempt})...")
 
     def _reconnect_channel(self):
         if self._is_connection_alive:
@@ -189,7 +206,6 @@ class AmqpClient:
         # Keep track whether or not we need to auto-close the connection after we're done
         auto_close_connection = False
         if not self.connection:
-            self.connect()
             auto_close_connection = True
         # =============================
         if declare_queue:
@@ -199,6 +215,10 @@ class AmqpClient:
         while keep_consuming:
             self.logger.debug(f"Connecting to queue {queue}...")
             try:
+                if not self.channel or self.channel.is_closed:
+                    # This may occur when we're attempting to reconnect after a connection issue
+                    self.logger.info(f"{'*'*20}\nConnecting...\n{'*'*20}")
+                    self.connect()
                 # Set QOS prefetch count. Now that this is multi-threaded, we can now control how
                 # many messages we process in parallel by simply increasing this number.
                 self.channel.basic_qos(prefetch_count=qos_count)
