@@ -25,6 +25,7 @@ class AmqpClient:
         # Default the connection info to None to signal a connection has not been made yet
         self._clear_connection()
         self.consumer_tag = None
+        self._reconnect_delay = 0
         self.logger = logging.getLogger(__name__)
 
     def __enter__(self):
@@ -93,6 +94,7 @@ class AmqpClient:
             try:
                 self.connection = pika.BlockingConnection(url_parameters)
                 self.channel = self.connection.channel()
+                self._reconnect_delay = 0
                 break
             except ProbableAuthenticationError as ex:
                 # If we have a credentials issue, we're never going to be able to connect so let's
@@ -107,10 +109,12 @@ class AmqpClient:
                 if not retry_if_failed:
                     break
             # Add some backoff seconds if we're supposed to retry the connection
-            self.logger.debug("Waiting 10 seconds before retrying the connection:")
-            time.sleep(10)
+            self._set_reconnect_delay()
+            self.logger.info(
+                f"Waiting {self._reconnect_delay} seconds before retrying the connection...")
+            time.sleep(self._reconnect_delay)
             connection_attempt += 1
-            self.logger.debug(
+            self.logger.info(
                 f"Attempting to connect again (attempt #{connection_attempt})...")
 
     def _reconnect_channel(self):
@@ -126,6 +130,19 @@ class AmqpClient:
             except Exception:
                 pass
             self.connect()
+
+    def _set_reconnect_delay(self):
+        """
+        This function implements a growing reconnect delay. This allows the
+        application to immediately reconnect if something happens to the AMQP
+        connection. If the connection continually fails, however, then this
+        gradually increases the delay time in order to patiently wait for the
+        connection to be successful and not waste resources continually trying
+        to reconnect.
+        """
+        self._reconnect_delay += 1
+        if self._reconnect_delay > 30:
+            self._reconnect_delay = 30
 
     def close(self):
         # Stop consuming if we've started consuming already
