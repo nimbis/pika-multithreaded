@@ -1,7 +1,11 @@
 import functools
 import logging
 import pika
-from pika.exceptions import ChannelClosedByBroker, StreamLostError, ChannelWrongStateError
+from pika.exceptions import (
+    ProbableAuthenticationError,
+    ChannelClosedByBroker,
+    StreamLostError,
+    ChannelWrongStateError)
 import signal
 import ssl
 import threading
@@ -90,6 +94,12 @@ class AmqpClient:
                 self.connection = pika.BlockingConnection(url_parameters)
                 self.channel = self.connection.channel()
                 break
+            except ProbableAuthenticationError as ex:
+                # If we have a credentials issue, we're never going to be able to connect so let's
+                # just stop now
+                self.logger.error(
+                    f"ERROR: Incorrect connection credentials: {ex}")
+                raise
             except Exception as ex:
                 self.logger.error(
                     f"Unable to connect: {ex}",
