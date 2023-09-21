@@ -9,6 +9,7 @@ from pika.exceptions import (
     ChannelWrongStateError)
 import signal
 import ssl
+import sys
 import threading
 import time
 import uuid
@@ -305,8 +306,8 @@ class AmqpClient:
     def _signal_handler(self, sig, frame):
         self.logger.warning(
             "*** AMQP Client terminating. Closing AMQP connection...")
-        self.stop_consuming()
         self.close()
+        sys.exit(0)
 
     def stop_consuming(self):
         if self.consumer_tag and self._is_connection_alive and self.channel.is_open:
