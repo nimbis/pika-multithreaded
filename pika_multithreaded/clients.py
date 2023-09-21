@@ -241,8 +241,6 @@ class AmqpClient:
         if not self.connection:
             auto_close_connection = True
         # =============================
-        if declare_queue:
-            self.queue_declare(queue, durable=True)
         keep_consuming = True
         self.user_consumer_callback = callback_function
         while keep_consuming:
@@ -252,6 +250,11 @@ class AmqpClient:
                     # This may occur when we're attempting to reconnect after a connection issue
                     self.logger.info(f"{'*'*20}\nConnecting...\n{'*'*20}")
                     self.connect()
+                # Queue declare is idempotent so it doesn't matter if we call it many times back to
+                # back. So if we're able to connect to the AMQP server, this guarantees there will
+                # be a queue available to consume
+                if declare_queue:
+                    self.queue_declare(queue, durable=True)
                 # Set QOS prefetch count. Now that this is multi-threaded, we can now control how
                 # many messages we process in parallel by simply increasing this number.
                 self.logger.debug(f"Setting QOS: {qos_count}...")
