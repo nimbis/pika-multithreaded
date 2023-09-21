@@ -3,8 +3,9 @@ import logging
 import pika
 from pika.exceptions import (
     ProbableAuthenticationError,
-    ChannelClosedByBroker,
-    StreamLostError,
+    AuthenticationError,
+    ProbableAccessDeniedError,
+    AMQPConnectionError,
     ChannelWrongStateError)
 import signal
 import ssl
@@ -96,7 +97,9 @@ class AmqpClient:
                 self.channel = self.connection.channel()
                 self._reconnect_delay = 0
                 break
-            except ProbableAuthenticationError as ex:
+            except (ProbableAuthenticationError,
+                    AuthenticationError,
+                    ProbableAccessDeniedError) as ex:
                 # If we have a credentials issue, we're never going to be able to connect so let's
                 # just stop now
                 self.logger.error(
@@ -261,7 +264,7 @@ class AmqpClient:
                     consumer_tag=self.consumer_tag)
                 self.channel.start_consuming()
                 keep_consuming = False
-            except (StreamLostError, ChannelClosedByBroker) as ex:
+            except AMQPConnectionError as ex:
                 # There is a timeout of 1800000 ms that results in this exception so catch the
                 # exception and re-start the consumer
                 self.logger.error(
