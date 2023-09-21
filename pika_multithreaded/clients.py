@@ -244,7 +244,6 @@ class AmqpClient:
         keep_consuming = True
         self.user_consumer_callback = callback_function
         while keep_consuming:
-            self.logger.debug(f"Connecting to queue {queue}...")
             try:
                 if not self.channel or self.channel.is_closed:
                     # This may occur when we're attempting to reconnect after a connection issue
@@ -264,7 +263,7 @@ class AmqpClient:
                     self.consumer_tag = consumer_tag
                 else:
                     self.consumer_tag = f"pika-amqp-client-{str(uuid.uuid4())}"
-                self.logger.debug("Waiting for messages...")
+                self.logger.debug(f"Waiting for messages on queue {queue}...")
                 self.channel.basic_consume(
                     queue,
                     self._consumer_callback,
