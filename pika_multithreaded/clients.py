@@ -94,7 +94,9 @@ class AmqpClient:
         while True:
             try:
                 self.connection = pika.BlockingConnection(url_parameters)
+                self.logger.debug("Connected successfully! Creating channel...")
                 self.channel = self.connection.channel()
+                self.logger.debug("Channel created successfully!")
                 self._reconnect_delay = 0
                 break
             except (ProbableAuthenticationError,
@@ -251,12 +253,14 @@ class AmqpClient:
                     self.connect()
                 # Set QOS prefetch count. Now that this is multi-threaded, we can now control how
                 # many messages we process in parallel by simply increasing this number.
+                self.logger.debug(f"Setting QOS: {qos_count}...")
                 self.channel.basic_qos(prefetch_count=qos_count)
                 # Consume the queue
                 if consumer_tag:
                     self.consumer_tag = consumer_tag
                 else:
                     self.consumer_tag = f"pika-amqp-client-{str(uuid.uuid4())}"
+                self.logger.debug("Waiting for messages...")
                 self.channel.basic_consume(
                     queue,
                     self._consumer_callback,
