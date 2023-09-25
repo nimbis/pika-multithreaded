@@ -1,10 +1,17 @@
 import functools
 import logging
 import pika
-from pika.exceptions import ChannelClosedByBroker, StreamLostError, ChannelWrongStateError
+from pika.exceptions import (
+    ProbableAuthenticationError,
+    AuthenticationError,
+    ProbableAccessDeniedError,
+    AMQPConnectionError,
+    ChannelWrongStateError)
 import signal
 import ssl
+import sys
 import threading
+import time
 import uuid
 
 from .utils import AmqpUtils
@@ -20,6 +27,7 @@ class AmqpClient:
         # Default the connection info to None to signal a connection has not been made yet
         self._clear_connection()
         self.consumer_tag = None
+        self._reconnect_delay = 0
         self.logger = logging.getLogger(__name__)
 
     def __enter__(self):
@@ -63,7 +71,7 @@ class AmqpClient:
         if auto_close_connection:
             self.close()
 
-    def connect(self):
+    def connect(self, retry_if_failed=True):
         if self.url.startswith("amqps://"):
             # Looks like we're making a secure connection
             # Create the SSL context for our secure connection. This context forces a more secure
@@ -83,8 +91,37 @@ class AmqpClient:
             raise Exception("AMQP URL must start with 'amqp://' or 'amqps://'")
 
         # Create the connection and store them in self
-        self.connection = pika.BlockingConnection(url_parameters)
-        self.channel = self.connection.channel()
+        connection_attempt = 1
+        while True:
+            try:
+                self.connection = pika.BlockingConnection(url_parameters)
+                self.logger.debug("Connected successfully! Creating channel...")
+                self.channel = self.connection.channel()
+                self.logger.debug("Channel created successfully!")
+                self._reconnect_delay = 0
+                break
+            except (ProbableAuthenticationError,
+                    AuthenticationError,
+                    ProbableAccessDeniedError) as ex:
+                # If we have a credentials issue, we're never going to be able to connect so let's
+                # just stop now
+                self.logger.error(
+                    f"ERROR: Incorrect connection credentials: {ex}")
+                raise
+            except Exception as ex:
+                self.logger.error(
+                    f"Unable to connect: {ex}",
+                    exc_info=True)
+                if not retry_if_failed:
+                    break
+            # Add some backoff seconds if we're supposed to retry the connection
+            self._set_reconnect_delay()
+            self.logger.info(
+                f"Waiting {self._reconnect_delay} seconds before retrying the connection...")
+            time.sleep(self._reconnect_delay)
+            connection_attempt += 1
+            self.logger.info(
+                f"Attempting to connect again (attempt #{connection_attempt})...")
 
     def _reconnect_channel(self):
         if self._is_connection_alive:
@@ -99,6 +136,19 @@ class AmqpClient:
             except Exception:
                 pass
             self.connect()
+
+    def _set_reconnect_delay(self):
+        """
+        This function implements a growing reconnect delay. This allows the
+        application to immediately reconnect if something happens to the AMQP
+        connection. If the connection continually fails, however, then this
+        gradually increases the delay time in order to patiently wait for the
+        connection to be successful and not waste resources continually trying
+        to reconnect.
+        """
+        self._reconnect_delay += 1
+        if self._reconnect_delay > 30:
+            self._reconnect_delay = 30
 
     def close(self):
         # Stop consuming if we've started consuming already
@@ -189,24 +239,31 @@ class AmqpClient:
         # Keep track whether or not we need to auto-close the connection after we're done
         auto_close_connection = False
         if not self.connection:
-            self.connect()
             auto_close_connection = True
         # =============================
-        if declare_queue:
-            self.queue_declare(queue, durable=True)
         keep_consuming = True
         self.user_consumer_callback = callback_function
         while keep_consuming:
-            self.logger.debug(f"Connecting to queue {queue}...")
             try:
+                if not self.channel or self.channel.is_closed:
+                    # This may occur when we're attempting to reconnect after a connection issue
+                    self.logger.info(f"{'*'*20}\nConnecting...\n{'*'*20}")
+                    self.connect()
+                # Queue declare is idempotent so it doesn't matter if we call it many times back to
+                # back. So if we're able to connect to the AMQP server, this guarantees there will
+                # be a queue available to consume
+                if declare_queue:
+                    self.queue_declare(queue, durable=True)
                 # Set QOS prefetch count. Now that this is multi-threaded, we can now control how
                 # many messages we process in parallel by simply increasing this number.
+                self.logger.debug(f"Setting QOS: {qos_count}...")
                 self.channel.basic_qos(prefetch_count=qos_count)
                 # Consume the queue
                 if consumer_tag:
                     self.consumer_tag = consumer_tag
                 else:
                     self.consumer_tag = f"pika-amqp-client-{str(uuid.uuid4())}"
+                self.logger.debug(f"Waiting for messages on queue {queue}...")
                 self.channel.basic_consume(
                     queue,
                     self._consumer_callback,
@@ -214,7 +271,7 @@ class AmqpClient:
                     consumer_tag=self.consumer_tag)
                 self.channel.start_consuming()
                 keep_consuming = False
-            except (StreamLostError, ChannelClosedByBroker) as ex:
+            except AMQPConnectionError as ex:
                 # There is a timeout of 1800000 ms that results in this exception so catch the
                 # exception and re-start the consumer
                 self.logger.error(
@@ -251,8 +308,8 @@ class AmqpClient:
     def _signal_handler(self, sig, frame):
         self.logger.warning(
             "*** AMQP Client terminating. Closing AMQP connection...")
-        self.stop_consuming()
         self.close()
+        sys.exit(0)
 
     def stop_consuming(self):
         if self.consumer_tag and self._is_connection_alive and self.channel.is_open:
