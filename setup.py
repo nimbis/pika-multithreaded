@@ -45,6 +45,7 @@ setup(
     author_email='info@nimbisservics.com',
     description='A project that enables multithreading support for the Pika package',
     long_description=long_description,
+    long_description_content_type='text/markdown',
     url="https://github.com/nimbis/pika-multithreaded",
     packages=find_packages(exclude=exclude_packages),
     python_requires='>=3.6',
